@@ -8,9 +8,12 @@
 #
 # The above copyright notice and this permission notice shall be included in all copies or
 # substantial portions of the Software.
+from __future__ import annotations
+
 import hashlib
 import os
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, cast
+from collections.abc import Iterable
+from typing import Any, cast
 
 import proto
 from google.cloud.bigquery import SchemaField
@@ -33,8 +36,8 @@ MAP = {
 
 
 def generate_field_v2(
-    base: SchemaField, i: int = 1, pool: Optional[Any] = None
-) -> Dict[str, Any]:
+    base: SchemaField, i: int = 1, pool: Any | None = None
+) -> dict[str, Any]:
     """Generate proto2 field properties from a SchemaField."""
     name: str = base.name
     typ: str = cast(str, base.field_type).upper()
@@ -51,7 +54,7 @@ def generate_field_v2(
             number=i,
             label=label,
             type=descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
-            type_name=proto_cls.DESCRIPTOR.full_name,  # type: ignore
+            type_name=proto_cls.DESCRIPTOR.full_name,  # type: ignore[attr-defined]
             json_name=name,
         )
     else:
@@ -67,8 +70,8 @@ def generate_field_v2(
 
 
 def proto_schema_factory_v2(
-    bigquery_schema: List[SchemaField], pool: Optional[Any] = None
-) -> Type[proto.Message]:
+    bigquery_schema: list[SchemaField], pool: Any | None = None
+) -> type[proto.Message]:
     """Generate a proto2 Message from a BigQuery schema."""
     fhash = hashlib.sha1()
     for f in bigquery_schema:
@@ -77,11 +80,11 @@ def proto_schema_factory_v2(
     clsname = (
         f"net.proto2.python.public.target_bigquery.AnonymousProto_{fhash.hexdigest()}"
     )
-    
+
     # Use the pool directly if provided, otherwise use the default pool
     if pool is None:
         pool = descriptor_pool.Default()
-    
+
     try:
         proto_descriptor = pool.FindMessageTypeByName(clsname)
         proto_cls = message_factory.GetMessageClass(proto_descriptor)
@@ -99,10 +102,10 @@ def proto_schema_factory_v2(
         pool.Add(file_proto)
         proto_descriptor = pool.FindMessageTypeByName(clsname)
         proto_cls = message_factory.GetMessageClass(proto_descriptor)
-    return proto_cls  # type: ignore
+    return proto_cls  # type: ignore[return-value]
 
 
-def generate_field(base: SchemaField, i: int = 1) -> Tuple[proto.Field, str]:
+def generate_field(base: SchemaField, i: int = 1) -> tuple[proto.Field, str]:
     """Not intended for production use.
     Generate a proto.Field from a SchemaField."""
     kwargs = {}
@@ -127,7 +130,7 @@ def generate_field(base: SchemaField, i: int = 1) -> Tuple[proto.Field, str]:
     return (f, name)
 
 
-def proto_schema_factory(bigquery_schema: Iterable[SchemaField]) -> Type[proto.Message]:
+def proto_schema_factory(bigquery_schema: Iterable[SchemaField]) -> type[proto.Message]:
     """Not intended for production use.
     Generate a proto.Message from a BigQuery schema."""
     return type(

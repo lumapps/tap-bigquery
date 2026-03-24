@@ -8,6 +8,8 @@
 #
 # The above copyright notice and this permission notice shall be included in all copies or
 # substantial portions of the Software.
+from __future__ import annotations
+
 import datetime
 import gzip
 import json
@@ -19,17 +21,13 @@ import time
 import traceback
 import uuid
 from abc import ABC, abstractmethod
-
-try:
-    from functools import cache
-except ImportError:
-    from functools import lru_cache as cache
-
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from copy import copy
 from dataclasses import dataclass, field
 from enum import Enum
 from fnmatch import fnmatch
+from functools import cache
 from io import BytesIO
 from multiprocessing import Process, Queue
 from multiprocessing.connection import Connection
@@ -37,19 +35,7 @@ from pathlib import Path
 from subprocess import PIPE, Popen
 from tempfile import TemporaryFile
 from textwrap import dedent, indent
-from typing import (
-    IO,
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Tuple,
-    Type,
-    Union,
-    cast,
-)
+from typing import IO, TYPE_CHECKING, Any, cast
 
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery, bigquery_storage_v1, storage
@@ -100,11 +86,11 @@ class BigQueryTable:
     """The dataset that this table belongs to."""
     project: str
     """The project that this table belongs to."""
-    jsonschema: Dict[str, Any]
+    jsonschema: dict[str, Any]
     """The jsonschema for this table."""
     ingestion_strategy: IngestionStrategy
     """The ingestion strategy for this table."""
-    transforms: Dict[str, bool] = field(default_factory=dict)
+    transforms: dict[str, bool] = field(default_factory=dict)
     """A dict of transformation rules to apply to the table schema."""
     schema_resolver_version: SchemaResolverVersion = SchemaResolverVersion.V1
 
@@ -119,7 +105,7 @@ class BigQueryTable:
             )
         return self._schema_translator
 
-    def get_schema(self, apply_transforms: bool = False) -> List[bigquery.SchemaField]:
+    def get_schema(self, apply_transforms: bool = False) -> list[bigquery.SchemaField]:
         """Returns the jsonschema to bigquery schema translation for this table."""
         if apply_transforms:
             return self.schema_translator.translated_schema_transformed
@@ -131,7 +117,7 @@ class BigQueryTable:
 
     def get_resolved_schema(
         self, apply_transforms: bool = False
-    ) -> List[bigquery.SchemaField]:
+    ) -> list[bigquery.SchemaField]:
         """Returns the schema for this table after factoring in the ingestion strategy."""
         if self.ingestion_strategy is IngestionStrategy.FIXED:
             return DEFAULT_SCHEMA
@@ -211,7 +197,7 @@ class BigQueryTable:
         # the table already exists
         return False
 
-    def default_table_options(self) -> Dict[str, Any]:
+    def default_table_options(self) -> dict[str, Any]:
         """Returns the default table options for this table."""
         schema_dump = json.dumps(self.jsonschema)
         return {
@@ -233,7 +219,7 @@ class BigQueryTable:
         }
 
     @staticmethod
-    def default_dataset_options() -> Dict[str, Any]:
+    def default_dataset_options() -> dict[str, Any]:
         """Returns the default dataset options for this dataset."""
         return {"location": "US"}
 
@@ -247,9 +233,9 @@ class BigQueryTable:
 class BigQueryCredentials:
     """BigQuery credentials."""
 
-    path: Optional[Union[str, Path]] = None
-    json: Optional[str] = None
-    project: Optional[str] = None
+    path: str | Path | None = None
+    json: str | None = None
+    project: str | None = None
 
     def __hash__(self) -> int:
         return hash((self.path, self.json, self.project))
@@ -303,8 +289,8 @@ class BaseBigQuerySink(BatchSink):
         self,
         target: "TargetBigQuery",
         stream_name: str,
-        schema: Dict[str, Any],
-        key_properties: Optional[List[str]],
+        schema: dict[str, Any],
+        key_properties: list[str] | None,
     ) -> None:
         """Initialize the sink."""
         super().__init__(target, stream_name, schema, key_properties)
@@ -330,8 +316,8 @@ class BaseBigQuerySink(BatchSink):
         if not created:
             self.update_schema()
 
-        self.merge_target: Optional[BigQueryTable] = None
-        self.overwrite_target: Optional[BigQueryTable] = None
+        self.merge_target: BigQueryTable | None = None
+        self.overwrite_target: BigQueryTable | None = None
         # In absence of dedupe or overwrite candidacy, we append to the target table directly
         # If the stream is marked for one of these strategies, we create a temporary table instead
         # and merge or overwrite the target table with the temporary table after the ingest.
@@ -448,8 +434,8 @@ class BaseBigQuerySink(BatchSink):
         return record
 
     def preprocess_record(
-        self, record: Dict[str, Any], context: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, record: dict[str, Any], context: dict[str, Any]
+    ) -> dict[str, Any]:
         """Preprocess a record before writing it to the sink."""
         metadata = {
             k: record.pop(k, None)
@@ -470,15 +456,21 @@ class BaseBigQuerySink(BatchSink):
         wait=wait_fixed(1),
         reraise=True,
     )
-    def create_target(self, key_properties: Optional[List[str]] = None) -> bool:
+    def create_target(self, key_properties: list[str] | None = None) -> bool:
         """Create the table in BigQuery."""
         kwargs = {"table": {}, "dataset": {}}
         # Table opts
         if key_properties and self.config.get("cluster_on_key_properties", False):
             kwargs["table"]["clustering_fields"] = tuple(key_properties[:4])
-        partition_grain: Optional[str] = self.config.get("partition_granularity")
-        partition_expiration_days: Optional[int] = self.config.get("partition_expiration_days")
-        expiration_ms: Optional[int] = partition_expiration_days * 24 * 60 * 60 * 1000 if partition_expiration_days is not None else None
+        partition_grain: str | None = self.config.get("partition_granularity")
+        partition_expiration_days: int | None = self.config.get(
+            "partition_expiration_days"
+        )
+        expiration_ms: int | None = (
+            partition_expiration_days * 24 * 60 * 60 * 1000
+            if partition_expiration_days is not None
+            else None
+        )
         if partition_grain:
             kwargs["table"]["time_partitioning"] = TimePartitioning(
                 type_=PARTITION_STRATEGY[partition_grain.upper()],
@@ -486,12 +478,14 @@ class BaseBigQuerySink(BatchSink):
                 expiration_ms=expiration_ms,
             )
         # Dataset opts
-        location: str = self.config.get(
+        location: str = self.config.get(  # type: ignore[assignment]
             "location", BigQueryTable.default_dataset_options()["location"]
         )
         kwargs["dataset"]["location"] = location
         # Create the table
-        is_created = self.table.create_table(self.client, self.apply_transforms, **kwargs)
+        is_created = self.table.create_table(
+            self.client, self.apply_transforms, **kwargs
+        )
         if self.generate_view:
             self.client.query(
                 self.table.schema_translator.generate_view_statement(
@@ -524,12 +518,12 @@ class BaseBigQuerySink(BatchSink):
     @staticmethod
     @abstractmethod
     def worker_cls_factory(
-        worker_executor_cls: Type["Process"], config: Dict[str, Any]
-    ) -> Union[Type[BaseWorker], Type["Process"]]:
+        worker_executor_cls: type["Process"], config: dict[str, Any]
+    ) -> type[BaseWorker] | type["Process"]:
         """Return a worker class for the given parallelization type."""
         raise NotImplementedError
 
-    def merge_table(self, bigquery_client:bigquery.Client) -> None:
+    def merge_table(self, bigquery_client: bigquery.Client) -> None:
         target = self.merge_target.as_table()
         ordering_columns = ["_sdc_extracted_at", "_sdc_received_at"]
         tmp, ctas_tmp = None, "SELECT 1 AS _no_op"
@@ -544,10 +538,8 @@ class BaseBigQuerySink(BatchSink):
             )
             ctas_tmp = f"CREATE OR REPLACE TEMP TABLE `{tmp}` AS {dedupe_query}"
         merge_clause = (
-                f"MERGE `{self.merge_target}` AS target USING `{tmp or self.table}` AS source ON "
-                + " AND ".join(
-            f"target.`{f}` = source.`{f}`" for f in self.key_properties
-        )
+            f"MERGE `{self.merge_target}` AS target USING `{tmp or self.table}` AS source ON "
+            + " AND ".join(f"target.`{f}` = source.`{f}`" for f in self.key_properties)
         )
         update_clause = "UPDATE SET " + ", ".join(
             f"target.`{f.name}` = source.`{f.name}`" for f in target.schema
@@ -588,6 +580,7 @@ class BaseBigQuerySink(BatchSink):
 
         super().clean_up()
 
+
 class Denormalized:
     """This class provides common overrides for denormalized sinks and should be subclassed
     with an existing sink with higher MRO: DenormalizedSink(Denormalized, ExistingSink)."""
@@ -600,7 +593,7 @@ class Denormalized:
         wait=wait_fixed(1),
         reraise=True,
     )
-    def update_schema(self: BaseBigQuerySink) -> None:  # type: ignore
+    def update_schema(self: BaseBigQuerySink) -> None:  # type: ignore[misc]
         """Update the target schema."""
         table = self.table.as_table()
         current_schema = table.schema[:]
@@ -617,16 +610,16 @@ class Denormalized:
             )
 
     def preprocess_record(
-        self: BaseBigQuerySink,  # type: ignore
-        record: Dict[str, Any],
-        context: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        self: BaseBigQuerySink,  # type: ignore[misc]
+        record: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
         """Preprocess a record before writing it to the sink."""
         return self.table.schema_translator.translate_record(record)
 
 
 @contextmanager
-def augmented_syspath(new_paths: Optional[Iterable[str]] = None):
+def augmented_syspath(new_paths: Iterable[str] | None = None):
     """Context manager to temporarily add paths to sys.path."""
     original_sys_path = sys.path
     if new_paths is not None:
@@ -698,8 +691,8 @@ class SchemaTranslator:
 
     def __init__(
         self,
-        schema: Dict[str, Any],
-        transforms: Dict[str, bool],
+        schema: dict[str, Any],
+        transforms: dict[str, bool],
         resolver_version: SchemaResolverVersion = SchemaResolverVersion.V1,
     ) -> None:
         self.schema = schema
@@ -713,7 +706,7 @@ class SchemaTranslator:
         self._translated_schema_transformed = None
 
     @property
-    def translated_schema(self) -> List[SchemaField]:
+    def translated_schema(self) -> list[SchemaField]:
         """Translate the schema into a BigQuery schema."""
         if not self._translated_schema:
             self._translated_schema = [
@@ -723,7 +716,7 @@ class SchemaTranslator:
         return self._translated_schema
 
     @property
-    def translated_schema_transformed(self) -> List[SchemaField]:
+    def translated_schema_transformed(self) -> list[SchemaField]:
         """Translate the schema into a BigQuery schema using the SchemaTranslator `transforms`."""
         if not self._translated_schema_transformed:
             self._translated_schema_transformed = [
@@ -1042,7 +1035,7 @@ class Compressor:
             return self.buffer.read()
         return self.buffer.getvalue()  # type: ignore
 
-    def getbuffer(self) -> Union[memoryview, mmap.mmap]:
+    def getbuffer(self) -> memoryview | mmap.mmap:
         """Return the compressed buffer as a memoryview or mmap."""
         if not self._closed:
             self.close()
@@ -1073,9 +1066,7 @@ class Compressor:
 
 
 # pylint: disable=no-else-return,too-many-branches,too-many-return-statements
-def bigquery_type(
-    property_type: List[str], property_format: Optional[str] = None
-) -> str:
+def bigquery_type(property_type: list[str], property_format: str | None = None) -> str:
     """Convert a JSON Schema type to a BigQuery type."""
     if property_format == "date-time":
         return "timestamp"
@@ -1109,7 +1100,7 @@ def transform_column_name(
     add_underscore_when_invalid: bool = False,
     snake_case: bool = False,
     replace_period_with_underscore: bool = False,
-    **kwargs
+    **kwargs,
 ) -> str:
     """Transform a column name to a valid BigQuery column name.
     kwargs is here to handle unspecified column tranforms, this can become an issue if config is added in main

@@ -12,20 +12,10 @@
 
 from __future__ import annotations
 
-import copy
 import time
 import uuid
-from typing import (
-    TYPE_CHECKING,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Type,
-    Union,
-    cast,
-)
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from singer_sdk import Sink
 from singer_sdk import typing as th
@@ -373,7 +363,7 @@ class TargetBigQuery(Target):
 
         def worker_factory():
             return cast(
-                Type[BaseWorker],
+                type[BaseWorker],
                 self.get_sink_class().worker_cls_factory(
                     self.proc_cls,
                     dict(self.config),
@@ -388,8 +378,8 @@ class TargetBigQuery(Target):
             )
 
         self.worker_factory = worker_factory
-        self.workers: List[Union[BaseWorker, "Process"]] = []
-        self.worker_pings: Dict[str, float] = {}
+        self.workers: list[BaseWorker | "Process"] = []
+        self.worker_pings: dict[str, float] = {}
         self._jobs_enqueued = 0
         self._last_worker_creation = 0.0
 
@@ -398,19 +388,19 @@ class TargetBigQuery(Target):
         self._jobs_enqueued += 1
 
     # We can expand this to support other parallelization methods in the future.
-    # We woulod approach this by adding a new ParType enum and interpreting the
-    # the Process, Pipe, and Queue classes as protocols which can be duck-typed.
+    # We would approach this by adding a new ParType enum and interpreting the
+    # Process, Pipe, and Queue classes as protocols which can be duck-typed.
 
     def get_parallelization_components(
         self, default=ParType.THREAD
-    ) -> Tuple[
-        Type["Process"],
-        Callable[[bool], Tuple["Connection", "Connection"]],
+    ) -> tuple[
+        type["Process"],
+        Callable[[bool], tuple["Connection", "Connection"]],
         Callable[[], "Queue"],
         ParType,
     ]:
-        """Get the appropriate Process, Pipe, and Queue classes and the assoc ParTyp enum."""
-        use_procs: Optional[bool] = self.config.get("options", {}).get("process_pool")
+        """Get the appropriate Process, Pipe, and Queue classes and the assoc ParType enum."""
+        use_procs: bool | None = self.config.get("options", {}).get("process_pool")
 
         if use_procs is None:
             use_procs = default == ParType.PROCESS
@@ -419,7 +409,7 @@ class TargetBigQuery(Target):
             from multiprocessing.dummy import Pipe, Process, Queue
 
             self.logger.info("Using thread-based parallelism")
-            return Process, Pipe, Queue, ParType.THREAD  # type: ignore
+            return Process, Pipe, Queue, ParType.THREAD  # type: ignore[return-value]
         else:
             from multiprocessing import Pipe, Process, Queue
 
@@ -427,7 +417,7 @@ class TargetBigQuery(Target):
             return Process, Pipe, Queue, ParType.PROCESS
 
     # Worker management methods, which are used to manage the number of
-    # workers in the pool. The ensure_workers method should be called
+    # workers in the pool. The resize_worker_pool method should be called
     # periodically to ensure that the pool is at the correct size, ideally
     # once per batch.
 
@@ -470,7 +460,7 @@ class TargetBigQuery(Target):
             cast(
                 "Process", worker
             ).join()  # Wait for the worker to terminate. This should be a no-op.
-            self.logger.info("Culling terminated worker %s", worker.ext_id)  # type: ignore
+            self.logger.info("Culling terminated worker %s", worker.ext_id)  # type: ignore[union-attr]
         while self.add_worker_predicate or not self.workers:
             worker = self.worker_factory()
             cast("Process", worker).start()
@@ -481,11 +471,36 @@ class TargetBigQuery(Target):
         if worker_spawned:
             ...
 
+    def _poll_notifications(self) -> None:
+        """Poll worker notification pipes for job completions, log messages, and errors."""
+        while self.job_notification.poll():
+            ext_id = self.job_notification.recv()
+            self.worker_pings[ext_id] = time.time()
+            self._jobs_enqueued -= 1
+        while self.log_notification.poll():
+            msg = self.log_notification.recv()
+            self.logger.info(msg)
+        if self.error_notification.poll():
+            e, msg = self.error_notification.recv()
+            if self.config.get("fail_fast", True):
+                self.logger.error(msg)
+                try:
+                    # Try to drain if we can. This is a best effort.
+                    # TODO: we should consider if draining here is the right thing
+                    # to do. It's _possible_ we increment the state message when
+                    # data is not actually written. Its _unlikely_ so the upside is
+                    # greater than the downside for now but will revisit this.
+                    self.logger.error("Draining all sinks and terminating.")
+                    self.drain_all(is_endofpipe=True)
+                except Exception:
+                    self.logger.error("Drain failed.")
+                raise RuntimeError(msg) from e
+            else:
+                self.logger.warning(msg)
+
     # SDK overrides to inject our worker management logic and sink selection.
 
-    def get_sink_class(
-        self, stream_name: Optional[str] = None
-    ) -> Type[BaseBigQuerySink]:
+    def get_sink_class(self, stream_name: str | None = None) -> type[BaseBigQuerySink]:
         """Returns the sink class to use for a given stream based on user config."""
         _ = stream_name
         method, denormalized = (
@@ -514,15 +529,16 @@ class TargetBigQuery(Target):
         self,
         stream_name: str,
         *,
-        record: Optional[dict] = None,
-        schema: Optional[dict] = None,
-        key_properties: Optional[List[str]] = None,
+        record: dict | None = None,
+        schema: dict | None = None,
+        key_properties: list[str] | None = None,
     ) -> Sink:
-        """Get a sink for a stream. If the sink does not exist, create it. This override skips sink recreation
-        on schema change. Meaningful mid stream schema changes are not supported and extremely rare to begin
-        with. Most taps provide a static schema at stream init. We handle +90% of cases with this override without
-        the undue complexity or overhead of mid-stream schema evolution. If you need to support mid-stream schema
-        evolution on a regular basis, you should be using the fixed schema load pattern."""
+        """Get a sink for a stream. If the sink does not exist, create it. This override skips sink
+        recreation on schema change. Meaningful mid-stream schema changes are not supported and
+        extremely rare to begin with. Most taps provide a static schema at stream init. We handle
+        +90% of cases with this override without the undue complexity or overhead of mid-stream
+        schema evolution. If you need to support mid-stream schema evolution on a regular basis,
+        you should be using the fixed schema load pattern."""
         _ = record
         if schema is None:
             self._assert_sink_exists(stream_name)
@@ -532,65 +548,36 @@ class TargetBigQuery(Target):
             return self.add_sink(stream_name, schema, key_properties)
         return existing_sink
 
-    def drain_one(self, sink: Sink) -> None:  # type: ignore
-        """Drain a sink. Includes a hook to manage the worker pool and notifications."""
-        # self.logger.info(f"Jobs queued : {self.queue.qsize()} | Max nb jobs queued : {os.cpu_count() * 4} | Nb workers : {len(self.workers)} | Max nb workers : {os.cpu_count() * 2}")
+    def _process_record_message(self, message_dict: dict) -> None:
+        """Process a RECORD message. Extends the SDK implementation to manage the worker pool
+        and poll worker notification pipes before each batch drain check."""
         self.resize_worker_pool()
-        while self.job_notification.poll():
-            ext_id = self.job_notification.recv()
-            self.worker_pings[ext_id] = time.time()
-            self._jobs_enqueued -= 1
-        while self.log_notification.poll():
-            msg = self.log_notification.recv()
-            self.logger.info(msg)
-        if self.error_notification.poll():
-            e, msg = self.error_notification.recv()
-            if self.config.get("fail_fast", True):
-                self.logger.error(msg)
-                try:
-                    # Try to drain if we can. This is a best effort.
-                    # TODO: we should consider if draining here is the right thing
-                    # to do. It's _possible_ we increment the state message when
-                    # data is not actually written. Its _unlikely_ so the upside is
-                    # greater than the downside for now but will revisit this.
-                    self.logger.error("Draining all sinks and terminating.")
-                    self.drain_all(is_endofpipe=True)
-                except Exception:
-                    self.logger.error("Drain failed.")
-                raise RuntimeError(msg) from e
-            else:
-                self.logger.warning(msg)
-        super().drain_one(sink)
+        self._poll_notifications()
+        super()._process_record_message(message_dict)
 
-    def drain_all(self, is_endofpipe: bool = False) -> None:  # type: ignore
-        """Drain all sinks and write state message. If is_endofpipe, execute clean_up() on all sinks.
-        Includes an additional hook to allow sinks to do any pre-state message processing."""
-        state = copy.deepcopy(self._latest_state)
+    def _process_state_message(self, message_dict: dict) -> None:
+        """Process a STATE message. Extends the SDK implementation to call pre_state_hook on
+        each active sink before advancing state, ensuring any in-flight merge/commit operations
+        (e.g. storage_write batch mode) are flushed prior to writing the state checkpoint."""
         sink: BaseBigQuerySink
-        self._drain_all(list(self._sinks_active.values()), self.max_parallelism)
-        if is_endofpipe:
-            for worker in self.workers:
-                if cast("Process", worker).is_alive():
-                    self.queue.put(None)
-            while len(self.workers):
-                cast("Process", worker).join()
-                worker = self.workers.pop()
-            for sink in self._sinks_active.values():  # type: ignore
-                sink.clean_up()
-        else:
-            for worker in self.workers:
-                cast("Process", worker).join()
-            for sink in self._sinks_active.values():  # type: ignore
-                sink.pre_state_hook()
-        if state:
-            self._write_state_message(state)
-        self._reset_max_record_age()
+        for sink in self._sinks_active.values():  # type: ignore[assignment]
+            sink.pre_state_hook()
+        super()._process_state_message(message_dict)
 
-    def _validate_config(
-        self, raise_errors: bool = True, warnings_as_errors: bool = False
-    ) -> Tuple[List[str], List[str]]:
-        """Don't throw on config validation since our JSON schema doesn't seem to play well with meltano for whatever reason"""
-        return super()._validate_config(False, False)
+    def process_endofpipe(self) -> None:
+        """Called after all stdin input has been consumed. Sends termination signals to all
+        workers and joins them before delegating to the SDK to drain sinks and emit final state."""
+        for worker in self.workers:
+            if cast("Process", worker).is_alive():
+                self.queue.put(None)
+        while self.workers:
+            cast("Process", self.workers.pop()).join()
+        super().process_endofpipe()
+
+    def _validate_config(self, *, raise_errors: bool = True) -> list[str]:
+        """Don't throw on config validation since our JSON schema doesn't seem to play well
+        with meltano for whatever reason."""
+        return super()._validate_config(raise_errors=False)
 
 
 if __name__ == "__main__":
