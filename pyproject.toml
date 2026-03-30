@@ -36,10 +36,10 @@ target-bigquery = "target_bigquery.target:TargetBigQuery.cli"
 
 [dependency-groups]
 dev = [
-  "pytest>=8.3,<9",
-  "black>=24.0,<25",
+  "pytest>=9.0,<10",
+  "black>=26.0,<27",
   "mypy>=1.11,<2",
-  "isort>=5.13,<6",
+  "isort>=8.0,<9",
 ]
 
 [tool.uv]
