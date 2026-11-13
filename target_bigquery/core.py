@@ -452,7 +452,14 @@ class BaseBigQuerySink(BatchSink):
         )
 
     def _validate_and_parse(self, record: dict) -> dict:
+        # Check key properties on the raw record: preprocess_record reshapes it
+        # (wrapped under ``data``, sometimes JSON-encoded), so the SDK's
+        # post-preprocess check can't see them.
+        super()._singer_validate_message(record)
         return record
+
+    def _singer_validate_message(self, record: dict) -> None:
+        """Already done in _validate_and_parse, on the raw record."""
 
     def preprocess_record(
         self, record: dict[str, Any], context: dict[str, Any]
