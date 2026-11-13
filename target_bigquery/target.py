@@ -565,14 +565,25 @@ class TargetBigQuery(Target):
         super()._process_state_message(message_dict)
 
     def process_endofpipe(self) -> None:
-        """Called after all stdin input has been consumed. Sends termination signals to all
-        workers and joins them before delegating to the SDK to drain sinks and emit final state."""
+        """Drain every sink and stop the worker pool *before* the SDK's final drain_all.
+
+        The final (partial) batch of each sink is only enqueued by the drain, so workers must
+        still be alive to consume it, and sink clean up (merge/overwrite, GCS load, stream
+        commit) plus the final STATE must wait until every enqueued job has been processed.
+        Sinks are empty afterwards, so drain_all only runs clean up and writes the STATE."""
+        self._drain_all(self._sinks_to_clear, 1)
+        self._drain_all(self._sinks_active.values(), self.max_parallelism)
+        self._stop_workers()
+        super().process_endofpipe()
+
+    def _stop_workers(self) -> None:
+        """Send a termination signal to every live worker and wait for the queue to be consumed."""
         for worker in self.workers:
             if cast("Process", worker).is_alive():
                 self.queue.put(None)
         while self.workers:
             cast("Process", self.workers.pop()).join()
-        super().process_endofpipe()
+        self._poll_notifications()
 
     def _validate_config(self, *, raise_errors: bool = True) -> list[str]:
         """Don't throw on config validation since our JSON schema doesn't seem to play well
