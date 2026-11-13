@@ -11,6 +11,25 @@ from singer_sdk.testing import target_sync_test
 from target_bigquery.core import BigQueryCredentials, bigquery_client_factory
 from target_bigquery.target import TargetBigQuery
 
+
+def _env_config() -> dict[str, str]:
+    """Connection settings for the live BigQuery/GCS test resources."""
+    return {
+        "credentials_json": os.environ["BQ_CREDS"],
+        "project": os.environ["BQ_PROJECT"],
+        "dataset": os.environ["BQ_DATASET"],
+        "bucket": os.environ["GCS_BUCKET"],
+        "location": os.environ.get("BQ_LOCATION", "US"),
+    }
+
+
+def _check_client():
+    """Client used to read back loaded rows, pinned to the test project."""
+    cfg = _env_config()
+    return bigquery_client_factory(
+        BigQueryCredentials(json=cfg["credentials_json"], project=cfg["project"])
+    )
+
 # id = (0-4) - normal case
 # id = 5 - datetime NULL case
 # id = 6 - datetime wrong format case
@@ -94,10 +113,7 @@ def test_basic_sync(method, batch_mode):
 
     target = TargetBigQuery(
         config={
-            "credentials_json": os.environ["BQ_CREDS"],
-            "project": os.environ["BQ_PROJECT"],
-            "dataset": os.environ["BQ_DATASET"],
-            "bucket": os.environ["GCS_BUCKET"],
+            **_env_config(),
             **OPTS,
         },
     )
@@ -108,9 +124,7 @@ def test_basic_sync(method, batch_mode):
     # target.get_sink_class().WORKER_CAPACITY_FACTOR = 1
     # target.get_sink_class().WORKER_CREATION_MIN_INTERVAL = 1
 
-    client = bigquery_client_factory(
-        BigQueryCredentials(json=target.config["credentials_json"])
-    )
+    client = _check_client()
     stdout, stderr = target_sync_test(target, singer_input)
     del stdout, stderr
     time.sleep(5)  # wait for the eventual consistency seen in LoadJob sinks
@@ -118,13 +132,15 @@ def test_basic_sync(method, batch_mode):
     records = [
         dict(record)
         for record in client.query(
-            f"SELECT data FROM {target.config['dataset']}.{table_name} WHERE STRING(data.load_id) = '{load_id}' ORDER BY INT64(data.id)"
+            f"SELECT data FROM {target.config['dataset']}.{table_name} WHERE STRING(data.load_id) = '{load_id}' ORDER BY INT64(data.id)",
+            location=_env_config()["location"],
         ).result()
     ]
     records_2 = [
         dict(record)
         for record in client.query(
-            f"SELECT data FROM {target.config['dataset']}.{table_name_2} WHERE STRING(data.load_id) = '{load_id}' ORDER BY INT64(data.id)"
+            f"SELECT data FROM {target.config['dataset']}.{table_name_2} WHERE STRING(data.load_id) = '{load_id}' ORDER BY INT64(data.id)",
+            location=_env_config()["location"],
         ).result()
     ]
 
@@ -163,10 +179,7 @@ def test_basic_denorm_sync(method):
 
     target = TargetBigQuery(
         config={
-            "credentials_json": os.environ["BQ_CREDS"],
-            "project": os.environ["BQ_PROJECT"],
-            "dataset": os.environ["BQ_DATASET"],
-            "bucket": os.environ["GCS_BUCKET"],
+            **_env_config(),
             **OPTS,
         },
     )
@@ -177,9 +190,7 @@ def test_basic_denorm_sync(method):
     # target.get_sink_class().WORKER_CAPACITY_FACTOR = 2
     # target.get_sink_class().WORKER_CREATION_MIN_INTERVAL = 1
 
-    client = bigquery_client_factory(
-        BigQueryCredentials(json=target.config["credentials_json"])
-    )
+    client = _check_client()
     stdout, stderr = target_sync_test(target, singer_input)
     del stdout, stderr
     time.sleep(10)  # wait for the eventual consistency seen in LoadJobs sinks
@@ -187,7 +198,8 @@ def test_basic_denorm_sync(method):
     records = [
         dict(record)
         for record in client.query(
-            f"SELECT * FROM {target.config['dataset']}.{table_name} WHERE load_id = '{load_id}' ORDER BY id"
+            f"SELECT * FROM {target.config['dataset']}.{table_name} WHERE load_id = '{load_id}' ORDER BY id",
+            location=_env_config()["location"],
         ).result()
     ]
 

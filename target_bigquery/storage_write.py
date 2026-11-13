@@ -22,7 +22,6 @@ from queue import Empty
 from time import sleep
 from typing import TYPE_CHECKING, Any, cast
 
-import orjson
 from google.cloud.bigquery_storage_v1 import BigQueryWriteClient, types, writer
 from google.protobuf import json_format, message
 from proto import Field
@@ -35,6 +34,7 @@ from target_bigquery.core import (
     BaseBigQuerySink,
     BaseWorker,
     Denormalized,
+    json_dumps,
     storage_client_factory,
 )
 from target_bigquery.proto_gen import proto_schema_factory_v2
@@ -305,7 +305,7 @@ class BigQueryStorageWriteSink(BaseBigQuerySink):
 
     def preprocess_record(self, record: dict, context: dict) -> dict:
         record = super().preprocess_record(record, context)
-        record["data"] = orjson.dumps(record["data"]).decode("utf-8")
+        record["data"] = json_dumps(record["data"]).decode("utf-8")
         return record
 
     def process_record(self, record: dict[str, Any], context: dict[str, Any]) -> None:
@@ -343,7 +343,9 @@ class BigQueryStorageWriteSink(BaseBigQuerySink):
         if self.open_streams:
             committer = storage_client_factory(self._credentials)
             for name, stream in self.open_streams:
-                stream.close()
+                # Thread workers share the stream object and close it on exit.
+                if not stream._closed:
+                    stream.close()
                 committer.finalize_write_stream(name=name)
             write = committer.batch_commit_write_streams(
                 types.BatchCommitWriteStreamsRequest(

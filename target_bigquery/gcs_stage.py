@@ -37,6 +37,7 @@ from target_bigquery.core import (
     ParType,
     bigquery_client_factory,
     gcs_client_factory,
+    json_dumps,
 )
 
 if TYPE_CHECKING:
@@ -164,7 +165,7 @@ class BigQueryGcsStagingSink(BaseBigQuerySink):
         }
 
     def process_record(self, record: dict[str, Any], context: dict[str, Any]) -> None:
-        self.buffer.write(orjson.dumps(record, option=orjson.OPT_APPEND_NEWLINE))
+        self.buffer.write(json_dumps(record, option=orjson.OPT_APPEND_NEWLINE))
 
     def process_batch(self, context: dict[str, Any]) -> None:
         self.buffer.close()
