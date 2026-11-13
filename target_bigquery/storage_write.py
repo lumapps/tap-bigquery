@@ -343,7 +343,9 @@ class BigQueryStorageWriteSink(BaseBigQuerySink):
         if self.open_streams:
             committer = storage_client_factory(self._credentials)
             for name, stream in self.open_streams:
-                stream.close()
+                # Thread workers share the stream object and close it on exit.
+                if not stream._closed:
+                    stream.close()
                 committer.finalize_write_stream(name=name)
             write = committer.batch_commit_write_streams(
                 types.BatchCommitWriteStreamsRequest(
