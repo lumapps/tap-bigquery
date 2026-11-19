@@ -18,7 +18,6 @@ from multiprocessing.dummy import Process as _Thread
 from queue import Empty
 from typing import Any, cast
 
-import orjson
 from google.api_core.exceptions import GatewayTimeout, NotFound
 from google.cloud import _http, bigquery
 from tenacity import retry, retry_if_exception_type, stop_after_delay, wait_fixed
@@ -28,6 +27,8 @@ from target_bigquery.core import (
     BaseWorker,
     Denormalized,
     bigquery_client_factory,
+    json_dumps,
+    orjson_json_module,
 )
 
 
@@ -50,7 +51,7 @@ class StreamingInsertWorker(BaseWorker):
     def run(self) -> None:
         """Run the worker."""
         # A monkey patch since we can't override the default json encoder...
-        _http.json = orjson
+        _http.json = orjson_json_module  # type: ignore[assignment]
         client: bigquery.Client = bigquery_client_factory(self.credentials)
         while True:
             try:
@@ -107,7 +108,7 @@ class BigQueryStreamingInsertSink(BaseBigQuerySink):
 
     def preprocess_record(self, record: dict, context: dict) -> dict:
         record = super().preprocess_record(record, context)
-        record["data"] = orjson.dumps(record["data"]).decode("utf-8")
+        record["data"] = json_dumps(record["data"]).decode("utf-8")
         return record
 
     @property

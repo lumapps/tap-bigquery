@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import datetime
+import decimal
 import gzip
 import json
 import mmap
@@ -35,8 +36,10 @@ from pathlib import Path
 from subprocess import PIPE, Popen
 from tempfile import TemporaryFile
 from textwrap import dedent, indent
+from types import SimpleNamespace
 from typing import IO, TYPE_CHECKING, Any, cast
 
+import orjson
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery, bigquery_storage_v1, storage
 from google.cloud.bigquery import SchemaField
@@ -227,6 +230,24 @@ class BigQueryTable:
         return hash(
             (self.name, self.dataset, self.project, json.dumps(self.jsonschema))
         )
+
+
+def _json_default(obj: Any) -> Any:
+    """orjson fallback. The Singer SDK parses JSON floats as Decimal, which orjson does not
+    support. Emit them verbatim as JSON numbers to keep full precision; non-finite values
+    have no JSON representation and become null."""
+    if isinstance(obj, decimal.Decimal):
+        return orjson.Fragment(str(obj)) if obj.is_finite() else None
+    raise TypeError(f"Type is not JSON serializable: {type(obj).__name__}")
+
+
+def json_dumps(obj: Any, option: int | None = None) -> bytes:
+    """Serialize to JSON bytes with orjson, handling Decimal."""
+    return orjson.dumps(obj, default=_json_default, option=option)
+
+
+# Drop-in replacement for the `json` module, used to patch google-cloud's HTTP layer.
+orjson_json_module = SimpleNamespace(dumps=json_dumps, loads=orjson.loads)
 
 
 @dataclass
@@ -431,7 +452,14 @@ class BaseBigQuerySink(BatchSink):
         )
 
     def _validate_and_parse(self, record: dict) -> dict:
+        # Check key properties on the raw record: preprocess_record reshapes it
+        # (wrapped under ``data``, sometimes JSON-encoded), so the SDK's
+        # post-preprocess check can't see them.
+        super()._singer_validate_message(record)
         return record
+
+    def _singer_validate_message(self, record: dict) -> None:
+        """Already done in _validate_and_parse, on the raw record."""
 
     def preprocess_record(
         self, record: dict[str, Any], context: dict[str, Any]

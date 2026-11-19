@@ -14,5 +14,6 @@ TestTargetBigQuery = get_target_test_class(
         "credentials_json": os.environ.get("BQ_CREDS", ""),
         "project": os.environ.get("BQ_PROJECT", ""),
         "dataset": os.environ.get("BQ_DATASET", ""),
+        "location": os.environ.get("BQ_LOCATION", "US"),
     },
 )
